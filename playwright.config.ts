@@ -11,7 +11,6 @@ import { defineConfig, devices } from '@playwright/test';
  */
 
 export default defineConfig({
-
   // Carpeta donde estarán las pruebas E2E
   testDir: './tests/e2e',
 
@@ -37,9 +36,7 @@ export default defineConfig({
   //
   // o usar la URL pública.
   use: {
-    baseURL:
-      process.env.BASE_URL ??
-      'https://beverage-ledger-six.vercel.app',
+    baseURL: process.env.BASE_URL ?? 'https://beverage-ledger-six.vercel.app',
 
     // Guarda evidencia cuando una prueba falla.
     screenshot: 'only-on-failure',
