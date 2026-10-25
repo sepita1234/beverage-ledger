@@ -160,6 +160,9 @@ export function DataTable<T>({
     <Wrapper
       className={cn('overflow-x-auto', isLoading && 'block', className)}
       aria-busy={isLoading || undefined}
+      // A wide table scrolls sideways, and a keyboard can only scroll what it
+      // can focus: a named region in the tab order (WCAG 2.1.1).
+      {...(!isLoading && { role: 'region', 'aria-label': caption, tabIndex: 0 })}
     >
       {/* Fixed layout on a phone, automatic from `sm` up.
 
@@ -184,8 +187,9 @@ export function DataTable<T>({
                   className={cn(
                     // `truncate` rather than plain `whitespace-nowrap`: under a
                     // fixed layout a header wider than its column would print
-                    // straight over the one beside it.
-                    'truncate px-3 py-3 text-xs font-medium uppercase tracking-wider text-contrast/60',
+                    // straight over the one beside it. /70 and not lighter: at
+                    // text-xs anything fainter fails WCAG AA contrast.
+                    'truncate px-3 py-3 text-xs font-medium uppercase tracking-wider text-contrast/70',
                     column.align === 'end' ? 'text-right' : 'text-left',
                     hidden && hideClasses[hidden],
                   )}

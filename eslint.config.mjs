@@ -10,7 +10,17 @@ const compat = new FlatCompat({ baseDirectory: __dirname });
 /** @type {import('eslint').Linter.Config[]} */
 const eslintConfig = [
   {
-    ignores: ['.next/**', 'coverage/**', 'node_modules/**', 'next-env.d.ts', 'public/**'],
+    ignores: [
+      '.next/**',
+      'coverage/**',
+      'node_modules/**',
+      'next-env.d.ts',
+      'public/**',
+      // Playwright and Serenity BDD output.
+      'reports/**',
+      'test-results/**',
+      'target/**',
+    ],
   },
 
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
@@ -57,6 +67,12 @@ const eslintConfig = [
         },
       ],
     },
+  },
+
+  // Chai's property assertions (`.to.be.null`, `.to.exist`) are expressions.
+  {
+    files: ['cypress/**/*.ts'],
+    rules: { '@typescript-eslint/no-unused-expressions': 'off' },
   },
 
   // Last: turns off stylistic rules that collide with the formatter.

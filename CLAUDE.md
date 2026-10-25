@@ -56,7 +56,7 @@ Ojo con una cosa: el README es lo único que se mantiene **en inglés o en espa�
 
 **Y la presentación también.** La Fase 7 sacó el copy del JSX a `src/i18n/messages/{es,en}.json` —**el español es el idioma por defecto**—, puso una landing pública en `/` y dejó el nombre del producto en `config/branding` en vez de quemado. Lo único que queda es documentación: la Fase 8, y el `README.md` de la raíz sigue describiendo la app *anterior* a la reescritura.
 
-**Ambos repos están desplegados**: el front en Vercel y la API en Render (`https://beverage-ledger-api.onrender.com`). Ver §9, que es donde el despliegue cambia cómo se trabaja en local.
+**Ambos repos están desplegados**: el front en Vercel y la API en Render (`https://beverage-ledger-api-jfzo.onrender.com`). Ver §9, que es donde el despliegue cambia cómo se trabaja en local.
 
 **La pantalla de perfil se hizo fuera del orden de fases** —entonces todavía en una rama, `feat/profile-screen`— porque el hueco que tapaba era funcional y no de presentación: nadie podía cambiar su propia contraseña.
 
@@ -74,8 +74,21 @@ pnpm install --frozen-lockfile  # lo que hace CI: falla si el lockfile no cuadra
 pnpm dev                        # servidor de desarrollo (Turbopack) en :3000
 pnpm build                      # build de producción
 pnpm start                      # servir el build
-pnpm test                       # Vitest, las pruebas de caminos de tests/
-pnpm test:coverage              # las mismas + coverage/lcov.info para SonarCloud
+pnpm test                       # Vitest: unitarias, funcionales y de seguridad, sin red
+pnpm test:unit                  # solo las de caminos de tests/
+pnpm test:funcional             # regresión funcional: pantallas reales sobre una API falsa
+pnpm test:seguridad             # regresión de seguridad del cliente
+pnpm test:coverage              # unitarias y funcionales + coverage para Sonar
+pnpm test:screenplay            # Serenity/JS + Playwright contra la API desplegada (pnpm build antes)
+pnpm test:screenplay:report     # el reporte HTML de Serenity BDD (necesita Java 17+)
+pnpm test:e2e                   # Playwright de punta a punta (pnpm build antes)
+pnpm test:gherkin               # .feature en español con Cucumber + Screenplay (pnpm start antes)
+pnpm test:gherkin:report        # su reporte de Serenity BDD, en target/site/serenity-gherkin
+pnpm test:cypress               # Cypress: flujos, API, seguridad y accesibilidad (pnpm start antes)
+pnpm test:cypress:open          # Cypress interactivo (Studio AI se usa desde aquí)
+pnpm test:cypress:prompt        # cy.prompt, necesita Cypress Cloud (CYPRESS_PROJECT_ID y CYPRESS_RECORD_KEY)
+pnpm test:stagehand             # Stagehand, necesita GOOGLE_GENERATIVE_AI_API_KEY (pnpm build antes)
+pnpm test:selenium              # el proyecto de Selenium IDE con selenium-side-runner (pnpm start antes)
 pnpm api:types                  # regenera src/lib/api/schema.d.ts desde la API viva
 pnpm i18n:check                 # es.json y en.json tienen las mismas claves
 pnpm lint                       # ESLint (pnpm lint:fix para autocorregir)
@@ -88,11 +101,45 @@ pnpm test -t "<nombre del caso>"                          # filtrar por nombre d
 
 Las pruebas viven en `tests/`, no junto al código, con el nombre `rf-<NN>-<front|conexion>-<unidad>.test.ts(x)`: `NN` es el requisito funcional que cubren. Corren en jsdom, en serie (`fileParallelism: false`), y `vitest.config.mts` carga el `.env` con `loadEnv`, así que no hace falta exportar variables a mano.
 
-Cuatro pruebas de `tests/` (`rf-01-front-handle-submit`, `rf-03-front-accept-invite-form`, `rf-09-front-submit`, `rf-29-front-change-status`) hacen login real y golpean la API: necesitan `TEST_USER_EMAIL` y `TEST_USER_PASSWORD` en el `.env` y un `NEXT_PUBLIC_API_URL` que responda. `rf-09` además **escribe**: reasigna el `origin` de un producto y crea uno nuevo que deja desactivado. En CI corren igual, contra Render, por decisión del usuario.
+| Suite | Carpeta | Contra qué corre |
+|---|---|---|
+| Vitest `unit` | `tests/*.test.ts(x)` | dobles del cliente o de `fetch` |
+| Vitest `funcional` | `tests/regression/funcional/` | las pantallas reales con sus proveedores, sobre una API falsa en memoria (`tests/support/fake-api.ts`) |
+| Vitest `seguridad` | `tests/regression/seguridad/` | lo mismo, más `next.config.ts` |
+| Playwright `screenplay` | `e2e/screenplay/` | `next start` y **la API desplegada en Render** |
+| Playwright `e2e` | `e2e/flujos/` | `next start` y **la API desplegada en Render** |
+| Cucumber `gherkin` | `e2e/features/` | `next start` y **la API desplegada en Render** |
+| Cypress | `cypress/e2e/{flujos,api,seguridad,accesibilidad}/` | `next start` y **la API desplegada en Render** |
+| Cypress `cy.prompt` | `cypress/e2e/ia/` | lo mismo, más **Cypress Cloud** |
+| Stagehand | `e2e/stagehand/` | lo mismo, más **el modelo de Gemini** |
+| Selenium IDE | `selenium/beverage-ledger.side` | `next start` y **la API desplegada en Render** |
+
+Las regresiones cubren solo las 6 funcionalidades que ya tenían una: RF-01, 03, 06, 09, 29 y 30. Las suites de Vitest usan el alias `@tests/`, las de Playwright y Cucumber `@e2e/`, y las de Cypress `@cy/`, porque ESLint prohíbe los imports relativos que suben de directorio.
+
+Decisiones de las suites añadidas para el ejercicio final del curso:
+
+- **Gherkin reutiliza las tareas de `e2e/screenplay/`**: las features están en español (`# language: es`, Dado–Cuando–Entonces) y los pasos solo componen tareas y preguntas que ya existían. Corren con Cucumber y `@serenity-js/cucumber`, no con Playwright Test, así que Cucumber no levanta el servidor: hay que tener `pnpm start` corriendo.
+- **Toda contraseña de una cuenta de CI pasa por `Masked.valueOf`.** Sin eso el reporter de consola y el JSON de Serenity BDD la imprimen en claro (`enters "…" into el campo «Contraseña»`); `IniciarSesion` la filtraba hasta que se corrigió. Un reporte de `target/` generado antes de ese cambio puede tenerla.
+- **Cypress comparte el presupuesto de login de Playwright** (`e2e/support/throttle.ts`), pero no con un `cy.intercept`: el interceptor todavía no existe dentro de un `before`, y Cypress falla uno que retiene la petición más que `defaultCommandTimeout`. Lo que provoca una llamada limitada toma antes su turno con `cy.takeAuthSlots()`: `cy.visit` y `cy.reload` están sobrescritos para el refresh (y el lookup en `/invite/…`), y el envío del login pasa por `cy.submitSignIn()`. Una spec nueva que dispare una de esas llamadas de otra forma tiene que tomar su turno igual. Las credenciales van en `env` (secretas, se leen con `cy.env()`) y la URL de la API en `expose`: Cypress 16 eliminó `Cypress.env()`.
+- **Cypress necesita su binario aparte**: está en `ignoredBuiltDependencies`, así que `pnpm install` no lo descarga y hay que correr `pnpm exec cypress install`. En la terminal de VS Code falla con `bad option: --smoke-test` porque hereda `ELECTRON_RUN_AS_NODE`; se corre con `env -u ELECTRON_RUN_AS_NODE`.
+- **Stagehand 4 es solo ESM**, y los `.ts` de este repo se cargan como CommonJS: sus specs son `.mts`, importan los mensajes directamente (no `e2e/support/browser.ts`, cuyo alias `@/` no resuelve desde ESM) y `zod` va fijado en la misma versión exacta que trae Stagehand. Las credenciales se escriben por selector después de un `observe()`, nunca dentro de un `act()`, para que no lleguen al modelo.
+- **Stagehand vive dentro de la capa gratuita de Gemini**, y eso fija el modelo y el ritmo. Una corrida hace al menos 19 llamadas (6 `observe`, 8 `act`, 5 `extract`), y Gemini Flash da **20 al día** en la capa gratuita: no alcanza ni para una con un reintento. Por eso el modelo por defecto es `google/gemini-3.5-flash-lite` (500 al día, 15 por minuto), y la variable `STAGEHAND_MODEL` de GitHub manda sobre él. Los límites reales de cada modelo se leen en `aistudio.google.com/rate-limit` del proyecto de la clave; Google no los publica. Contra las 15 por minuto, `abrir()` envuelve `act`, `observe` y `extract` para que esperen turno en `e2e/support/throttle.ts` (`waitForModelSlot`), a 6 operaciones por minuto porque un `act()` puede gastar dos llamadas: Stagehand reintenta un rechazo al instante y no cuando la cuota lo pide. Un modelo Lite lee un `z.string()` pelado como id de elemento (`"0-146"`); cuando se quiere texto, el campo lleva `.describe()`. Un proyecto de Google con facturación activa no vuelve solo a la capa gratuita aunque su saldo prepago llegue a cero, y entonces responde `prepayment credits are depleted`: la clave tiene que salir de un proyecto sin facturación.
+- **El proyecto de Selenium IDE guarda marcadores `{{CI_*}}`**, no credenciales: `scripts/run-selenium-ide.mjs` los rellena en una copia dentro de `reports/selenium/` y lanza el runner. Selenium no pasa por el presupuesto de login, así que no se corre a la vez que otra suite de navegador.
+- **axe mide la pantalla en reposo**: Cypress espera a que las tablas carguen y `expectAccessible` de Playwright a que acabe el fundido de entrada de la vista (medida a mitad de animación, el texto aún es translúcido y falla un contraste que cumple). Así se encontraron y corrigieron el contraste del texto secundario `text-xs` (nunca por debajo de `/70`; las insignias y la marca, a color pleno), el nombre del menú de la cuenta (empieza por las iniciales que muestra, WCAG 2.5.3) y las tablas con scroll, que ahora son una región enfocable.
+- **Un diálogo que sigue montado al cerrarse se reabre con lo que se escribió.** Los formularios de producto, taxonomía y bodega se siembran al montarse, así que su `key` suma un contador de aperturas: cada apertura vuelve a leer lo guardado (DEF-01, caso 3b de `rf-09-producto.cy.ts`). `UserFormDialog` no lo necesita porque se desmonta al cerrar.
+- **Los errores de la API traen `code`** (`ERR-` + 8 hex, heurística 33); `describeError` lo añade al mensaje solo en los 5xx, que es cuando la persona necesita citarlo.
+- **En GitHub Actions todo corre en `ci.yml`, en cada push, pero no todo bloquea.** Gherkin, Cypress y Selenium IDE son deterministas y bloquean el despliegue. Stagehand y `cy.prompt` corren a continuación con `continue-on-error` y fuera de los `needs` del despliegue: una inferencia que falla o un cupo agotado deja su evidencia sin frenar nada ni poner la ejecución en rojo. Van en cadena y no en paralelo porque comparten el grupo `render-api` y GitHub cancela un segundo job en espera. Cada uno se salta con aviso si le falta su configuración: `GOOGLE_GENERATIVE_AI_API_KEY` (secret) para Stagehand, y `CYPRESS_PROJECT_ID` (variable) con `CYPRESS_RECORD_KEY` (secret) para `cy.prompt`. `ia.yml` corre las tres suites con IA solo a mano, para regenerar evidencias sin un push.
+- **En Jenkins, lo mismo**: Gherkin, Cypress y Selenium IDE son fases del `Jenkinsfile`, y Stagehand y `cy.prompt` van en una fase con `catchError`, que la marca y deja el build en verde. Están antes del despliegue y no después, porque `vercel build` reescribe `.next` con el entorno de Vercel. `Jenkinsfile.ia` (job `beverage-ledger-ia`, solo manual) es el equivalente de `ia.yml`. Cucumber y Cypress no levantan la app como el `webServer` de Playwright: `withApp()` la sirve **en el mismo paso** que la suite, porque Jenkins mata lo que un paso deja corriendo. La imagen no trae Google Chrome, así que Stagehand, Selenium IDE y `cy.prompt` usan el Chromium de Playwright a través de `CHROME_PATH`.
+
+**Ninguna prueba de Vitest toca la red.** Simulan `fetch` o el cliente `api` y ejercen el código real de `src/`. Las de navegador sí, por decisión del usuario: entran con las cuentas fijas de CI (`CI_ADMIN`, `CI_MANAGER`, `CI_OPERATOR`) y respetan el límite de login de la API con un presupuesto compartido (`e2e/support/throttle.ts`). Solo crean **un miembro por corrida**, en el escenario Screenplay del ciclo de un miembro, que termina suspendido. Necesitan que el `CORS_ORIGINS` de la API incluya `http://localhost:3000`. Las pendientes de la heurística (preguntas 36, 41 y 42) van como `test.fixme`.
+
+Hubo cuatro (`rf-01-front-handle-submit`, `rf-03-front-accept-invite-form`, `rf-09-front-submit`, `rf-29-front-change-status`) que iniciaban sesión contra la API real; se borraron porque probaban la API y no el front, duplicaban caminos que ya cubren sus versiones con dobles (`rf-01-front-validate-credentials`, `rf-03-front-accept`, `rf-09-front-update`, `rf-29-front-update`), fallaban sin una API levantada y `rf-09` escribía en la base de producción en cada build.
 
 ### CI con Jenkins
 
-Además del workflow de GitHub Actions, el pipeline está en el `Jenkinsfile` de la raíz. **El servidor no vive en este repo**: es una instancia compartida con la API, definida en la carpeta `jenkins/beverage-ledger/`, hermana de los clones (sin versionar). Allí están la imagen con Node 22 y corepack, los plugins, un **SonarQube local** con su Postgres (http://localhost:9000) y toda la configuración como código (`casc.yaml`): usuario admin, credenciales (`next-public-api-url`, `test-user`, `sonar-token`) y los dos jobs, `beverage-ledger` y `beverage-ledger-api`, ambos sobre `main`. No hay asistente de instalación; lo que se cambie en la UI se pierde al reiniciar.
+> **Desactivado: el pipeline activo es GitHub Actions** (`ci.yml` y `ia.yml`). Los jobs de Jenkins siguen definidos en `casc.yaml` con `disabled(true)` y los `Jenkinsfile` se mantienen al día, pero no corren. No actives los dos a la vez: ambos despliegan y comparten el límite de login de la API. Lo que sigue describe Jenkins para cuando se reactive.
+
+Además del workflow de GitHub Actions, el pipeline está en el `Jenkinsfile` de la raíz. **El servidor no vive en este repo**: es una instancia compartida con la API, definida en la carpeta `jenkins/beverage-ledger/`, hermana de los clones (sin versionar). Allí están la imagen con Node 22 y corepack, los plugins, un **SonarQube local** con su Postgres (http://localhost:9000) y toda la configuración como código (`casc.yaml`): usuario admin, credenciales (`next-public-api-url`, `sonar-token` y las cuentas `ci-admin`, `ci-manager`, `ci-operator` y `ci-lockout`) y los dos jobs, `beverage-ledger` y `beverage-ledger-api`, ambos sobre `main`. No hay asistente de instalación; lo que se cambie en la UI se pierde al reiniciar.
 
 ```bash
 cd ../jenkins/beverage-ledger
@@ -100,7 +147,8 @@ cp .env.example .env          # admin, SONAR_TOKEN, API y usuario de prueba
 docker compose up -d --build  # Jenkins en :8080, SonarQube en :9000
 ```
 
-- **Las fases, en orden**: `Instalación de dependencias` → `Revisión estática` (lint, tipos y formato, seguidos y no en paralelo: el primero que falla corta) → `Pruebas (unitarias, regresión)` → `Compilación` → `Calidad (SonarQube)` → `Despliegue`. Cada una se detiene si falla, y ninguna posterior corre. Son las mismas que en el repo de la API.
+- **Las fases, en orden**: `Instalación de dependencias` (incluye Chromium para Playwright y el binario de Cypress) → `Revisión estática` (lint, tipos y formato, seguidos y no en paralelo: el primero que falla corta) → `Pruebas unitarias` → `Compilación` → `Pruebas de regresión` (`Funcionales` → `Seguridad`, que además corre `pnpm audit --prod --audit-level high` → `Screenplay + Serenity` → `Gherkin (Cucumber + Screenplay)`) → `Pruebas E2E: Playwright` → `Pruebas E2E: Cypress` → `Pruebas de regresión: Selenium IDE (grabación y reproducción)` → `Pruebas con IA` (Stagehand y `cy.prompt`, que no bloquean) → `Calidad (SonarQube)` → `Despliegue`. Cada una se detiene si falla, y ninguna posterior corre. Sonar lee el coverage de `coverage/unit` y `coverage/funcional`.
+- **Screenplay y E2E corren bajo `lock('render-api')`**, el mismo candado que las pruebas de API del otro job, porque comparten el límite de login. El reporte de Serenity BDD se publica en el build (plugin `htmlpublisher`) y se archiva en `target/site/serenity`.
 - **Despliega Jenkins, no Vercel.** `vercel.json` apaga los despliegues por push (`git.deploymentEnabled: false`); la fase `Despliegue` usa la CLI (`vercel pull`, `build --prod`, `deploy --prebuilt --prod`) solo en `main` y solo si pasaron todas las fases anteriores, umbral de calidad de SonarQube incluido. El `NEXT_PUBLIC_API_URL` de producción sale del proyecto de Vercel, no del de Jenkins, que solo sirve a los tests.
 - **El stage de análisis va contra el SonarQube local, no contra SonarCloud**: el servidor sale de `SONAR_HOST_URL`, que pone Jenkins, y el `Jenkinsfile` no nombra ninguno. GitHub Actions sigue analizando en SonarCloud con `sonar-project.properties`, cuyo `sonar.organization` el SonarQube local ignora.
 - **El job lee el `Jenkinsfile` de GitHub**, no del disco: un cambio al pipeline no corre hasta que se empuja. Un push a `main` lanza el build en segundos: el webhook del repo apunta a un canal de smee.io y el contenedor `smee` lo reenvía a Jenkins, que nunca queda expuesto a internet. Un sondeo cada 15 minutos recoge lo que se haya empujado con el relé apagado. El repo es privado: Jenkins clona con la credencial `github`, un token de solo lectura que va en `GITHUB_TOKEN` del `.env`.

@@ -186,7 +186,7 @@
     },
     "account": {
       "menu": "Account menu",
-      "menuFor": "Account menu for {name}",
+      "menuFor": "{initials} · Account menu for {name}",
       "profile": "Your profile",
       "signOut": "Sign out",
       "landing": "Go to the public site"
@@ -714,6 +714,8 @@
       "empty": "You have not invited anyone yet.",
       "emptyDescription": "Inviting someone is the only way to add them to the organization.",
       "revoke": "Cancel",
+      "revokeConfirm": "Yes, cancel it",
+      "revokeKeep": "No, keep it",
       "revoked": "Invitation cancelled",
       "revokedDescription": "The link you sent to {email} no longer works.",
       "revokeFailed": "The invitation could not be cancelled.",

@@ -55,7 +55,7 @@ function renderProductCell(product: Product, tNoBrand: string) {
       >
         {product.name}
       </Link>
-      <p className="text-xs text-accent/70">{product.brand?.name ?? tNoBrand}</p>
+      <p className="text-xs text-accent">{product.brand?.name ?? tNoBrand}</p>
     </div>
   );
 }
@@ -94,7 +94,8 @@ function statusCellSkeleton() {
 
 function renderStatusCell(product: Product, tActive: string, tDeactivated: string) {
   return product.isActive ? (
-    <span className="text-xs text-contrast/40">{tActive}</span>
+    // Quiet next to the badge, but /40 at text-xs fell below WCAG AA contrast.
+    <span className="text-xs text-contrast/70">{tActive}</span>
   ) : (
     <Badge tone="danger">{tDeactivated}</Badge>
   );
@@ -162,8 +163,13 @@ export function CatalogView() {
   const isLoading = isPending || isPlaceholderData || isRefreshing;
   const products = data?.data ?? [];
 
+  // Bumped on every opening: a dialog left mounted after Cancel would otherwise
+  // reopen with what was typed into it instead of what is saved.
+  const [opening, setOpening] = useState(0);
+
   const openForm = (product: Product | null) => {
     setEditing(product);
+    setOpening((count) => count + 1);
     setIsFormOpen(true);
   };
 
@@ -325,9 +331,9 @@ export function CatalogView() {
       )}
 
       {canManage && (
-        // Keyed so the form seeds itself from whichever product is being edited.
+        // Keyed by product and by opening, so the form seeds itself from what is saved.
         <ProductFormDialog
-          key={editing?.id ?? 'new'}
+          key={`${editing?.id ?? 'new'}-${opening}`}
           product={editing}
           open={isFormOpen}
           onOpenChange={setIsFormOpen}

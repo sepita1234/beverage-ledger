@@ -43,8 +43,8 @@ jobs:
       - name: Formato
         run: pnpm format:check
 
-  test:
-    name: Pruebas (unitarias, regresión)
+  unit:
+    name: Pruebas unitarias
     needs: static
     runs-on: ubuntu-latest
     env:
@@ -53,18 +53,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - name: Pruebas con coverage
-        run: pnpm test:coverage
+      - name: Pruebas unitarias con coverage
+        run: pnpm test:unit --coverage --coverage.reportsDirectory=coverage/unit
       - name: Guardar el reporte de coverage
         uses: actions/upload-artifact@v4
         with:
-          name: coverage
-          path: coverage/lcov.info
+          name: coverage-unit
+          path: coverage/unit/lcov.info
           retention-days: 7
 
   build:
     name: Compilación
-    needs: test
+    needs: unit
     runs-on: ubuntu-latest
     env:
       NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
@@ -73,10 +73,309 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Compilación
         run: pnpm build
+      # The browser jobs below serve this exact build instead of compiling again.
+      - name: Guardar la compilación
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build
+          path: .next
+          include-hidden-files: true
+          retention-days: 1
+
+  functional:
+    name: 'Pruebas de regresión: Funcionales'
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Pruebas funcionales con coverage
+        run: pnpm test:funcional --coverage --coverage.reportsDirectory=coverage/funcional
+      - name: Guardar el reporte de coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-funcional
+          path: coverage/funcional/lcov.info
+          retention-days: 7
+
+  security:
+    name: 'Pruebas de regresión: Seguridad'
+    needs: functional
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Pruebas de seguridad
+        run: pnpm test:seguridad
+      # Production dependencies only: dev tooling never reaches Vercel.
+      - name: Auditoría de dependencias
+        run: pnpm audit --prod --audit-level high
+
+  # The compiled app against the API deployed on Render, through dedicated CI
+  # accounts. One run at a time: every browser suite shares the login rate limit.
+  screenplay:
+    name: 'Pruebas de regresión: Screenplay + Serenity'
+    needs: security
+    runs-on: ubuntu-latest
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: &browser-suites
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+      CI_ADMIN_EMAIL: ${{ secrets.CI_ADMIN_EMAIL }}
+      CI_ADMIN_PASSWORD: ${{ secrets.CI_ADMIN_PASSWORD }}
+      CI_MANAGER_EMAIL: ${{ secrets.CI_MANAGER_EMAIL }}
+      CI_MANAGER_PASSWORD: ${{ secrets.CI_MANAGER_PASSWORD }}
+      CI_OPERATOR_EMAIL: ${{ secrets.CI_OPERATOR_EMAIL }}
+      CI_OPERATOR_PASSWORD: ${{ secrets.CI_OPERATOR_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-build
+          path: .next
+      # Serenity BDD's report CLI is a Java program.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Navegador
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Escenarios Screenplay
+        run: pnpm test:screenplay
+      - name: Reporte de Serenity BDD
+        if: always()
+        run: pnpm test:screenplay:report
+      - name: Guardar el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serenity-bdd
+          path: target/site/serenity
+          retention-days: 14
+
+  # The same Screenplay tasks, driven by the Spanish .feature files in
+  # e2e/features through Cucumber.
+  gherkin:
+    name: 'Pruebas de regresión: Gherkin (Cucumber + Screenplay)'
+    needs: screenplay
+    runs-on: ubuntu-latest
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: *browser-suites
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Navegador
+        run: pnpm exec playwright install --with-deps chromium
+      - uses: ./.github/actions/serve
+      - name: Escenarios Gherkin
+        run: pnpm test:gherkin
+      - name: Reporte de Serenity BDD
+        if: always()
+        run: pnpm test:gherkin:report
+      - name: Guardar el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serenity-bdd-gherkin
+          path: |
+            target/site/serenity-gherkin
+            reports/gherkin.xml
+          retention-days: 14
+
+  e2e:
+    name: 'Pruebas E2E: Playwright'
+    needs: gherkin
+    runs-on: ubuntu-latest
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: *browser-suites
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-build
+          path: .next
+      - name: Navegador
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Pruebas E2E
+        run: pnpm test:e2e
+      - name: Guardar el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e
+          path: |
+            reports/e2e
+            test-results
+          retention-days: 14
+
+  cypress:
+    name: 'Pruebas E2E: Cypress'
+    needs: e2e
+    runs-on: ubuntu-latest
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: *browser-suites
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # pnpm does not run Cypress's postinstall (pnpm-workspace.yaml), so the app
+      # binary is fetched here, once per version.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Binario de Cypress
+        run: pnpm exec cypress install
+      - uses: ./.github/actions/serve
+      - name: Pruebas E2E, API, seguridad y accesibilidad
+        run: pnpm test:cypress
+      - name: Guardar el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress
+          path: reports/cypress
+          retention-days: 14
+
+  # Recorded steps, no model: deterministic, so it gates like the suites above.
+  selenium:
+    name: 'Pruebas de regresión: Selenium IDE (grabación y reproducción)'
+    needs: cypress
+    runs-on: ubuntu-latest
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: *browser-suites
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/serve
+      # Chrome comes with the runner; Selenium Manager fetches the matching driver.
+      - name: Proyecto de Selenium IDE
+        run: pnpm test:selenium
+      - name: Guardar el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selenium-ide
+          # The filled-in copy of the project carries the credentials: only the results.
+          path: |
+            reports/selenium/*.json
+            reports/selenium/screenshots
+          retention-days: 14
+
+  # The model-driven suites run on every push and leave their evidence in this
+  # run, but never gate: no job below them waits on them, and continue-on-error
+  # keeps a flaky inference or a spent quota from turning the run red. They run
+  # beside the deploy, so they test what Render serves at that moment.
+  stagehand:
+    name: 'Pruebas con IA: Stagehand'
+    needs: selenium
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: *browser-suites
+    steps:
+      - name: Comprobar la clave del modelo
+        id: key
+        env:
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_GENERATIVE_AI_API_KEY" ]; then
+            echo "::warning::GOOGLE_GENERATIVE_AI_API_KEY no está en los secrets: Stagehand no corre."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.ready == 'true'
+      - uses: ./.github/actions/setup
+        if: steps.key.outputs.ready == 'true'
+      - uses: actions/download-artifact@v4
+        if: steps.key.outputs.ready == 'true'
+        with:
+          name: next-build
+          path: .next
+      # Stagehand launches the runner's Google Chrome itself, through its extension.
+      - name: Pruebas con Stagehand
+        if: steps.key.outputs.ready == 'true'
+        env:
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+          STAGEHAND_MODEL: ${{ vars.STAGEHAND_MODEL || 'google/gemini-3.5-flash-lite' }}
+        run: pnpm test:stagehand
+      - name: Guardar el reporte
+        if: always() && steps.key.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stagehand
+          path: |
+            reports/stagehand
+            reports/stagehand.xml
+            test-results
+          retention-days: 14
+
+  # After Stagehand rather than beside it: only one job may wait on the render-api
+  # group at a time, and GitHub cancels a second one queued behind it.
+  cypress-prompt:
+    name: 'Pruebas con IA: cy.prompt'
+    needs: [selenium, stagehand]
+    if: ${{ !cancelled() && needs.selenium.result == 'success' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    concurrency: { group: render-api, cancel-in-progress: false }
+    env: *browser-suites
+    steps:
+      - name: Comprobar el proyecto de Cypress Cloud
+        id: cloud
+        env:
+          CYPRESS_PROJECT_ID: ${{ vars.CYPRESS_PROJECT_ID }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+        run: |
+          if [ -z "$CYPRESS_PROJECT_ID" ] || [ -z "$CYPRESS_RECORD_KEY" ]; then
+            echo "::warning::Faltan vars.CYPRESS_PROJECT_ID o secrets.CYPRESS_RECORD_KEY: cy.prompt no corre."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.cloud.outputs.ready == 'true'
+      - uses: ./.github/actions/setup
+        if: steps.cloud.outputs.ready == 'true'
+      - uses: actions/cache@v4
+        if: steps.cloud.outputs.ready == 'true'
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Binario de Cypress
+        if: steps.cloud.outputs.ready == 'true'
+        run: pnpm exec cypress install
+      - uses: ./.github/actions/serve
+        if: steps.cloud.outputs.ready == 'true'
+      # --record sends the run to Cypress Cloud, where cy.prompt resolves the steps
+      # and the recording, screenshots and video are kept as evidence.
+      - name: Pruebas con cy.prompt
+        if: steps.cloud.outputs.ready == 'true'
+        env:
+          CYPRESS_PROJECT_ID: ${{ vars.CYPRESS_PROJECT_ID }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+        run: pnpm test:cypress:prompt
+      - name: Guardar el reporte
+        if: always() && steps.cloud.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-prompt
+          path: reports/cypress-prompt
+          retention-days: 14
 
   quality:
     name: Calidad (SonarQube Cloud)
-    needs: build
+    needs: selenium
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -84,11 +383,17 @@ jobs:
           # Sonar needs the full history to attribute code and compute "new code".
           fetch-depth: 0
       - uses: ./.github/actions/setup
-      - name: Recuperar el reporte de coverage
+      - name: Recuperar los reportes de coverage
         uses: actions/download-artifact@v4
         with:
-          name: coverage
+          pattern: coverage-*
           path: coverage
+      # download-artifact puts each one in a folder named after it.
+      - name: Ordenar los reportes como los espera sonar-project.properties
+        run: |
+          mkdir -p coverage/unit coverage/funcional
+          mv coverage/coverage-unit/lcov.info coverage/unit/lcov.info
+          mv coverage/coverage-funcional/lcov.info coverage/funcional/lcov.info
       # sonar-project.properties carries the analysis settings; the
       # organization and project key come from repository variables so the
       # same file serves whichever SonarQube Cloud account imports the repo.
